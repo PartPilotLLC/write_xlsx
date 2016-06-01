@@ -1,1 +1,1 @@
-WriteXLSX_VERSION = "0.84.1.beta"
+WriteXLSX_VERSION = "0.85.2-partpilot"
