@@ -290,11 +290,12 @@ module Writexlsx
     attr_reader :vml_data_id # :nodoc:
     attr_reader :vml_header_id # :nodoc:
     attr_reader :autofilter_area # :nodoc:
-    attr_reader :writer, :set_rows, :col_formats # :nodoc:
+    attr_reader :set_rows, :col_formats # :nodoc:
     attr_reader :vml_shape_id # :nodoc:
     attr_reader :comments, :comments_author # :nodoc:
     attr_accessor :dxf_priority # :nodoc:
     attr_reader :vba_codename # :nodoc:
+    attr_reader :optimization
 
     def initialize(workbook, index, name) #:nodoc:
       @writer = Package::XMLWriterSimple.new
@@ -306,6 +307,7 @@ module Writexlsx
       @cell_data_table = {}
       @excel_version = 2007
       @palette = workbook.palette
+      @optimization = workbook.optimization
 
       @page_setup = PageSetup.new
 
@@ -364,6 +366,8 @@ module Writexlsx
       @default_col_pixels     = 64
       @default_row_rezoed     = 0
 
+      @previous_row           = 0
+
       @merge = []
 
       @has_vml        = false
@@ -371,6 +375,10 @@ module Writexlsx
       @comments = Package::Comments.new(self)
       @buttons_array          = []
       @header_images_array    = []
+
+      if @optimization
+        @row_writer = Package::XMLWriterSimple.new(@optimization)
+      end
 
       @validations = []
 
@@ -389,7 +397,17 @@ module Writexlsx
       end
     end
 
+    def writer
+      @optimization ? @row_writer : @writer
+    end
+
+    #
+    # Over-ridden to ensure that write_single_row() is called for the final row
+    # when optimisation mode is on.
+    #
     def set_xml_writer(filename) #:nodoc:
+      write_single_row if @optimization
+
       @writer.set_xml_writer(filename)
     end
 
@@ -401,7 +419,11 @@ module Writexlsx
           write_sheet_views
           write_sheet_format_pr
           write_cols
-          write_sheet_data
+          if @optimization
+            write_optimized_sheet_data
+          else
+            write_sheet_data
+          end
           write_sheet_protection
           # write_sheet_calc_pr
           write_phonetic_pr if excel2003_style?
@@ -2190,6 +2212,11 @@ module Writexlsx
       check_dimensions(row, col)
       store_row_col_max_min_values(row, col)
 
+      # Write previous row if in in-line string optimization mode.
+      if @optimization && row > @previous_row
+        write_single_row(row)
+      end
+
       store_data_to_table(NumberCellData.new(self, row, col, num, xf))
     end
 
@@ -2231,7 +2258,13 @@ module Writexlsx
       check_dimensions(row, col)
       store_row_col_max_min_values(row, col)
 
-      index = shared_string_index(str[0, STR_MAX])
+      # Write a shared string or an in-line string based on optimization level.
+      index = @optimization ? str[0, STR_MAX] : shared_string_index(str[0, STR_MAX])
+
+      # Write previous row if in in-line string optimization mode.
+      if @optimization && row > @previous_row
+        write_single_row(row)
+      end
 
       store_data_to_table(StringCellData.new(self, row, col, index, xf))
     end
@@ -2393,6 +2426,11 @@ module Writexlsx
       check_dimensions(row, col)
       store_row_col_max_min_values(row, col)
 
+      # Write previous row if in in-line string optimization mode.
+      if @optimization && row > @previous_row
+        write_single_row(row)
+      end
+
       store_data_to_table(BlankCellData.new(self, row, col, xf))
     end
 
@@ -2440,6 +2478,11 @@ module Writexlsx
         check_dimensions(row, col)
         store_row_col_max_min_values(row, col)
         formula = formula.sub(/^=/, '')
+
+        # Write previous row if in in-line string optimization mode.
+        if @optimization && row > @previous_row
+          write_single_row(row)
+        end
 
         store_data_to_table(FormulaCellData.new(self, row, col, formula, format, value))
       end
@@ -2510,6 +2553,11 @@ module Writexlsx
 
       # Remove array formula braces and the leading =.
       formula = formula.sub(/^\{(.*)\}$/, '\1').sub(/^=/, '')
+
+      # Write previous row if in in-line string optimization mode.
+      if @optimization && row1 > @previous_row
+        write_single_row(row1)
+      end
 
       store_data_to_table(FormulaArrayCellData.new(self, row1, col1, formula, xf, range, value))
 
@@ -2667,6 +2715,11 @@ module Writexlsx
 
       if hyperlinks_count > 65_530
         raise "URL '#{url}' added but number of URLS is over Excel's limit of 65,530 URLS per worksheet."
+      end
+
+      # Write previous row if in in-line string optimization mode.
+      if @optimization && row > @previous_row
+        write_single_row(row)
       end
 
       # Write the hyperlink string.
@@ -2829,6 +2882,11 @@ module Writexlsx
       date_time = convert_date_time(str)
 
       if date_time
+        # Write previous row if in in-line string optimization mode.
+        if @optimization && row > @previous_row
+          write_single_row(row)
+        end
+
         store_data_to_table(NumberCellData.new(self, row, col, date_time, xf))
       else
         # If the date isn't valid then write it as a string.
@@ -4316,6 +4374,13 @@ module Writexlsx
     # produce inconsistent results.
     #
     def add_table(*args)
+      # We would need to order the write statements very carefully within this
+      # function to support optimisation mode. Disable add_table() when it is
+      # on for now.
+      if @optimization
+        raise "add_table() isn't supported when set_optimization() is on"
+      end
+
       # Table count is a member of Workbook, global to all Worksheet.
       table = Package::Table.new(self, *args)
       @tables << table
@@ -5639,6 +5704,8 @@ module Writexlsx
     # with data missing.
     #
     def get_range_data(row_start, col_start, row_end, col_end) # :nodoc:
+      return if @optimization
+
       # TODO. Check for worksheet limits.
 
       # Iterate through the table data.
@@ -5770,21 +5837,21 @@ module Writexlsx
     def write_cell_value(value = '') #:nodoc:
       value ||= ''
       value = value.to_i if value == value.to_i
-      @writer.data_element('v', value)
+      writer.data_element('v', value)
     end
 
     #
     # Write the cell formula <f> element.
     #
     def write_cell_formula(formula = '') #:nodoc:
-      @writer.data_element('f', formula)
+      writer.data_element('f', formula)
     end
 
     #
     # Write the cell array formula <f> element.
     #
     def write_cell_array_formula(formula, range) #:nodoc:
-      @writer.data_element('f', formula,
+      writer.data_element('f', formula,
                            [
                             ['t', 'array'],
                             ['ref', range]
@@ -6750,6 +6817,23 @@ module Writexlsx
     end
 
     #
+    # Write the <sheetData> element when the memory optimisation is on. In which
+    # case we read the data stored in the temp file and rewrite it to the XML
+    # sheet file.
+    #
+    def write_optimized_sheet_data
+      if !@dim_rowmin
+        # If the dimensions aren't defined then there is no data to write.
+        @writer.xml_empty_tag('sheetData')
+      else
+        @writer.tag_elements('sheetData') do
+          @writer.io_write(@row_writer.string)
+          @row_writer = nil
+        end
+      end
+    end
+
+    #
     # Write out the worksheet data as a series of rows and cells.
     #
     def write_rows #:nodoc:
@@ -6788,10 +6872,42 @@ module Writexlsx
     end
 
     #
+    # Write out the worksheet data as a single row with cells. This method is
+    # used when memory optimisation is on. A single row is written and the data
+    # table is reset. That way only one row of data is kept in memory at any one
+    # time. We don't write span data in the optimised case since it is optional.
+    #
+    def write_single_row(current_row = 0)
+      row_num     = @previous_row
+
+      # Set the new previous row as the current row.
+      @previous_row = current_row
+
+      # Skip row if it doesn't contain row formatting, cell data or a comment.
+      return if not_contain_formatting_or_data?(row_num)
+
+      # Write the cells if the row contains data.
+      if @cell_data_table[row_num]
+        args = @set_rows[row_num] || []
+        write_row_element(row_num, nil, *args) do
+          write_cell_column_dimension(row_num)
+        end
+      elsif @comments[row_num]
+        write_empty_row(row_num, nil, *(@set_rows[row_num]))
+      else
+        # Row attributes only.
+        write_empty_row(row_num, nil, *(@set_rows[row_num]))
+      end
+
+      # Reset table.
+      @cell_data_table = {}
+    end
+
+    #
     # Write the <row> element.
     #
     def write_row_element(*args)  # :nodoc:
-      @writer.tag_elements('row', row_attributes(args)) do
+      writer.tag_elements('row', row_attributes(args)) do
         yield
       end
     end
@@ -6800,7 +6916,7 @@ module Writexlsx
     # Write and empty <row> element, i.e., attributes only, no cell data.
     #
     def write_empty_row(*args) #:nodoc:
-      @writer.empty_tag('row', row_attributes(args))
+      writer.empty_tag('row', row_attributes(args))
     end
 
     def row_attributes(args)

@@ -46,6 +46,41 @@ class TestExampleMatch < Test::Unit::TestCase
     compare_xlsx(File.join(@perl_output, @xlsx), @xlsx)
   end
 
+  def test_a_simple_optimization
+    @xlsx = 'a_simple_optimization.xlsx'
+    # Create a new workbook called simple.xls and add a worksheet
+    workbook  = WriteXLSX.new(@xlsx, {optimization: 1})
+    worksheet = workbook.add_worksheet
+
+    # The general syntax is write(row, column, token). Note that row and
+    # column are zero indexed
+    #
+
+    # Write some text
+    worksheet.write(0, 0, "Hi Excel!")
+
+    # Write some numbers
+    worksheet.write(2, 0, 3)          # Writes 3
+    worksheet.write(3, 0, 3.00000)    # Writes 3
+    worksheet.write(4, 0, 3.00001)    # Writes 3.00001
+    worksheet.write(5, 0, 3.14159)    # TeX revision no.?
+
+    # Write some formulas
+    worksheet.write(7, 0, '=A3 + A6')
+    worksheet.write(8, 0, '=IF(A5>3,"Yes", "No")')
+
+    # Write a hyperlink
+    hyperlink_format = workbook.add_format(
+                                           :color     => 'blue',
+                                           :underline => 1
+                                           )
+
+    worksheet.write(10, 0, 'http://www.ruby-lang.org/', hyperlink_format)
+
+    workbook.close
+    compare_xlsx(File.join(@perl_output, @xlsx), @xlsx)
+  end
+
   def test_array_formula
     @xlsx = 'array_formula.xlsx'
     workbook  = WriteXLSX.new(@xlsx)

@@ -46,6 +46,7 @@ module Writexlsx
     attr_reader :image_types, :images  # :nodoc:
     attr_reader :shared_strings  # :nodoc:
     attr_reader :vba_project  # :nodoc:
+    attr_reader :optimization # :nodoc:
     attr_reader :excel2003_style # :nodoc:
     #
     # A new Excel workbook is created using the +new+ constructor
@@ -90,7 +91,8 @@ module Writexlsx
     #
     def initialize(file, *option_params)
       options, default_formats = process_workbook_options(*option_params)
-      @writer = Package::XMLWriterSimple.new
+      @optimization        = options[:optimization] || false
+      @writer = Package::XMLWriterSimple.new(@optimization)
 
       @tempdir = options[:tempdir] ||
         File.join(Dir.tmpdir, Digest::MD5.hexdigest("#{Time.now.to_f.to_s}-#{Process.pid}"))
@@ -113,7 +115,6 @@ module Writexlsx
       @custom_colors       = []
       @doc_properties      = {}
       @local_time          = Time.now
-      @optimization        = options[:optimization] || 0
       @x_window            = 240
       @y_window            = 15
       @window_width        = 16095

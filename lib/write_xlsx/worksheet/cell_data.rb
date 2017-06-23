@@ -57,17 +57,46 @@ module Writexlsx
       def initialize(worksheet, row, col, index, xf)
         @worksheet = worksheet
         @row, @col, @token, @xf = row, col, index, xf
+        @optimization = worksheet.optimization
       end
 
       def data
-        { :sst_id => token }
+        if @worksheet.optimization
+          token
+        else
+          { :sst_id => token }
+        end
       end
 
       def write_cell
         attributes = cell_attributes
-        attributes << ['t', 's']
-        @worksheet.writer.tag_elements('c', attributes) do
-          @worksheet.write_cell_value(token)
+        if @optimization
+          string = token
+
+          # Escape control characters. See SharedString.pm for details.
+          string = string.gsub(/(_x[0-9a-fA-F]{4}_)/, "_x005F$1")
+          if string =~ /([\x00-\x08\x0B-\x1F])/
+            string = string.gsub(
+              /([\x00-\x08\x0B-\x1F])/, sprintf("_x%04X_", $1.ord)
+            )
+          end
+
+          # Write any rich strings without further tags.
+          if string =~ /^<r>/ && string =~ %r!</r>$!
+            @worksheet.writer.rich_inline_string(string, attributes)
+          else
+            # Add attribute to preserve leading or trailing whitespace.
+            preserve = false
+            if string =~ /^\s/ || $string =~ /\s$/
+              preserve = true
+            end
+            @worksheet.writer.inline_string(string, preserve, attributes)
+          end
+        else
+          attributes << ['t', 's']
+          @worksheet.writer.tag_elements('c', attributes) do
+            @worksheet.write_cell_value(token)
+          end
         end
       end
 

@@ -9,8 +9,15 @@ module Writexlsx
     class XMLWriterSimple
       XMLNS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 
-      def initialize
-        @io = StringIO.new
+      attr_writer :io
+
+      def initialize(optimization = false)
+        if optimization
+          @io = Tempfile.new("#{$$}")
+          @io.binmode
+        else
+          @io = StringIO.new
+        end
       end
 
       def set_xml_writer(filename = nil)
@@ -82,6 +89,25 @@ module Writexlsx
         io_write("<si>#{data}</si>")
       end
 
+      #
+      # Optimised tag writer for inlineStr cell elements in the inner loop.
+      #
+      def inline_string(string, preserve, attributes)
+        attr     = ''
+        t_attr   = ''
+
+        # Set the <t> attribute to preserve whitespace.
+        t_attr = ' xml:space="preserve"' if preserve
+
+        attr = key_vals(attributes)
+
+        string = escape_data(string)
+
+        io_write(
+          "<c#{attr} t=\"inlineStr\"><is><t#{t_attr}>#{string}</t></is></c>"
+        )
+      end
+
       def characters(data)
         io_write(escape_data(data))
       end
@@ -98,10 +124,16 @@ module Writexlsx
       end
 
       def string
-        @io.string
+        if @io.respond_to?(:string)
+          @io.string
+        else
+          @io.rewind
+          @io.read
+        end
       end
 
       def io_write(str)
+# p caller(0)[0..8]
         @io << str
         str
       end
